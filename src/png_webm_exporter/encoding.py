@@ -144,14 +144,20 @@ def build_args(source: Sequence | MovieSource, settings: Settings, output: Path,
     return args + ["-an", "-f", "webm", str(output)]
 
 
-def build_frame_args(source: Path, output: Path, quality: int, frame_index: int) -> list[str]:
+def build_frame_args(source: Path, output: Path, quality: int, frame_index: int,
+                     full_range: bool = False) -> list[str]:
     if not 0 <= quality <= 100:
         raise ValueError("Frame WebP quality must be between 0 and 100.")
     if frame_index < 0:
         raise ValueError("Frame index must not be negative.")
+    # Without an explicit input matrix, swscale assumes BT.601 when converting the BT.709 video back to RGB,
+    # which shifts the frame's colors relative to the video.
+    range_name = "full" if full_range else "limited"
+    frame_filter = (f"select=eq(n\\,{frame_index}),"
+                    f"scale=in_color_matrix=bt709:in_range={range_name}:out_range=full,format=rgb24")
     args = ["-hide_banner", "-nostdin", "-nostats", "-y", "-xerror",
             "-i", str(source), "-map", "0:v:0",
-            "-vf", f"select=eq(n\\,{frame_index})", "-frames:v", "1",
+            "-vf", frame_filter, "-frames:v", "1",
             "-fps_mode", "passthrough", "-c:v", "libwebp"]
     if quality >= 100:
         args += ["-lossless", "1"]
@@ -557,7 +563,7 @@ class ExportJob:
                 raise Canceled
             self.on_progress({"phase": f"Exporting {position} frame as WebP ({mode})", "percent": -1})
             target = self.frame_paths.get(position, self.destination.with_name(f"{self.destination.stem}_{position}.webp")).absolute()
-            args = build_frame_args(self.destination, target, quality, index)
+            args = build_frame_args(self.destination, target, quality, index, self.settings.full_range)
             self.log.append(json.dumps([str(ffmpeg), *args]))
             self.execute(ffmpeg, args)
             if not target.is_file() or target.stat().st_size <= 0:
